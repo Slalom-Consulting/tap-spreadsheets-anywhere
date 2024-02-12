@@ -4,6 +4,8 @@ import logging
 
 import dateutil
 import singer
+import ast
+from singer import metadata
 from singer import utils
 from singer.catalog import Catalog, CatalogEntry
 from singer.schema import Schema
@@ -55,7 +57,8 @@ def generate_schema(table_spec, samples):
     }
 
     merged_schema = override_schema_with_config(inferred_schema, table_spec)
-    return Schema.from_dict(merged_schema)
+    # return Schema.from_dict(merged_schema)
+    return merged_schema
 
 def discover(config):
     streams = []
@@ -69,15 +72,15 @@ def discover(config):
             samples = file_utils.sample_files(table_spec, target_files,sample_rate=sample_rate,
                                               max_records=max_sampling_read, max_files=max_sampled_files)
             schema = generate_schema(table_spec, samples)
-            stream_metadata = []
+            # stream_metadata = []
             key_properties = table_spec.get('key_properties', [])
             streams.append(
                 CatalogEntry(
                     tap_stream_id=table_spec['name'],
                     stream=table_spec['name'],
-                    schema=schema,
+                    schema= Schema.from_dict(schema),
                     key_properties=key_properties,
-                    metadata=stream_metadata,
+                    metadata= load_metadata(table_spec, schema),
                     replication_key=None,
                     is_view=None,
                     database=None,
@@ -89,9 +92,22 @@ def discover(config):
             )
         except Exception as err:
             LOGGER.error(f"Unable to write Catalog entry for '{table_spec['name']}' - it will be skipped due to error {err}")
+            raise err
 
     return Catalog(streams)
 
+def load_metadata(table_spec, schema):
+    mdata = metadata.new()
+
+    mdata = metadata.write(mdata, (), 'table-key-properties', table_spec.get('key_properties', []))
+
+    for field_name in schema.get('properties', {}).keys():
+        if table_spec.get('key_properties', []) and field_name in table_spec.get('key_properties', []):
+            mdata = metadata.write(mdata, ('properties', field_name), 'inclusion', 'automatic')
+        else:
+            mdata = metadata.write(mdata, ('properties', field_name), 'inclusion', 'available')
+
+    return metadata.to_list(mdata)
 
 def sync(config, state, catalog):
     # Loop over selected streams in catalog
@@ -132,19 +148,24 @@ REQUIRED_CONFIG_KEYS = 'tables'
 def main():
     # Parse command line arguments
     args = utils.parse_args([REQUIRED_CONFIG_KEYS])
-    crawl_paths = [x for x in args.config['tables'] if "crawl_config" in x and x["crawl_config"]]
-    if len(crawl_paths) > 0: # Our config includes at least one crawl block
-        LOGGER.info("Executing experimental 'crawl' mode to auto-generate a table config per bucket.")
-        tables_config = file_utils.config_by_crawl(crawl_paths)
-        # Add back in the non-crawl blocks
-        tables_config['tables'] += [x for x in args.config['tables'] if "crawl_config" not in x or not x["crawl_config"]]
-        crawl_results_file = "crawled-config.json"
-        LOGGER.info(f"Writing expanded crawl blocks to {crawl_results_file}.")
-        Config.dump(tables_config, open(crawl_results_file, "w"))
+    # crawl_paths = [x for x in args.config['tables'] if "crawl_config" in x and x["crawl_config"]]
+    # if len(crawl_paths) > 0: # Our config includes at least one crawl block
+    #     LOGGER.info("Executing experimental 'crawl' mode to auto-generate a table config per bucket.")
+    #     tables_config = file_utils.config_by_crawl(crawl_paths)
+    #     # Add back in the non-crawl blocks
+    #     tables_config['tables'] += [x for x in args.config['tables'] if "crawl_config" not in x or not x["crawl_config"]]
+    #     crawl_results_file = "crawled-config.json"
+    #     LOGGER.info(f"Writing expanded crawl blocks to {crawl_results_file}.")
+    #     Config.dump(tables_config, open(crawl_results_file, "w"))
+    tables_config = args.config
+    if isinstance(tables_config.get('tables',{}),list):
+        LOGGER.info(type(tables_config.get('tables',{})))
+        configlist = tables_config.get('tables',{})
     else:
-        tables_config = args.config
+        configlist = ast.literal_eval(tables_config.get('tables',{}))
+    tables_config['tables'] = Config.validate(configlist)
 
-    tables_config = Config.validate(tables_config)
+    file_utils.setup_aws_client(tables_config)
     # If discover flag was passed, run discovery mode and dump output to stdout
     if args.discover:
         catalog = discover(tables_config)

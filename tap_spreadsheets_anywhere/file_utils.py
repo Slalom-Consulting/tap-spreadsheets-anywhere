@@ -7,13 +7,11 @@ import dateutil
 import requests
 import singer
 import boto3
-from google.cloud import storage
 import os, logging
 from os import walk
 import tap_spreadsheets_anywhere.format_handler
 import tap_spreadsheets_anywhere.conversion as conversion
 import smart_open.ssh as ssh_transport
-from azure.storage.blob import BlobServiceClient
 import smart_open.ftp as ftp_transport
 
 LOGGER = logging.getLogger(__name__)
@@ -134,12 +132,8 @@ def get_matching_objects(table_spec, modified_since=None):
         target_objects = list_files_in_SSH_bucket(table_spec['path'],table_spec.get('search_prefix'))
     elif protocol in ["ftp"]:
         target_objects = list_files_in_ftp_server(table_spec['path'],table_spec.get('search_prefix'))
-    elif protocol in ["gs"]:
-        target_objects = list_files_in_gs_bucket(bucket,table_spec.get('search_prefix'))
     elif protocol in ["http", "https"]:
         target_objects = convert_URL_to_file_list(table_spec)
-    elif protocol in ["azure"]:
-        target_objects = list_files_in_azure_bucket(bucket,table_spec.get('search_prefix'))
     else:
         raise ValueError("Protocol {} not yet supported. Pull Requests are welcome!")
 
@@ -244,6 +238,8 @@ def list_files_in_ftp_server(uri, search_prefix=None):
     LOGGER.info("Found {} files.".format(entries))
     return entries
 
+def raise_error(error):
+    raise error
 
 def list_files_in_local_bucket(bucket, search_prefix=None):
     local_filenames = []
@@ -253,7 +249,7 @@ def list_files_in_local_bucket(bucket, search_prefix=None):
 
     LOGGER.info(f"Walking {path}.")
     max_results = 10000
-    for (dirpath, dirnames, filenames) in walk(path):
+    for (dirpath, dirnames, filenames) in walk(path, onerror=raise_error):
         for filename in filenames:
             abspath = os.path.join(dirpath,filename)
             relpath = os.path.relpath(abspath, path)
@@ -269,25 +265,70 @@ def list_files_in_local_bucket(bucket, search_prefix=None):
     return [{'Key': filename, 'LastModified': datetime.fromtimestamp(os.path.getmtime(os.path.join(path, filename)), timezone.utc)} for
             filename in local_filenames if os.path.exists(os.path.join(path, filename))]
 
-def list_files_in_gs_bucket(bucket, search_prefix=None):
-    gs_client = storage.Client()
-        
-    blobs = gs_client.list_blobs(bucket, prefix=search_prefix)
 
-    target_objects = [{'Key': blob.name, 'LastModified': blob.updated} for blob in blobs]
+def setup_aws_client(tables_config):
+    """
+    Initialize a default AWS session
+    :param config: connection config
+    """
+    LOGGER.info("Attempting to create AWS session")
+    tables_config = tables_config
+    # Get the required parameters from config file and/or environment variables
+    aws_access_key_id = tables_config.get('aws_access_key_id') or os.environ.get('AWS_ACCESS_KEY_ID')
+    aws_secret_access_key = tables_config.get('aws_secret_access_key') or os.environ.get('AWS_SECRET_ACCESS_KEY')
+    aws_session_token = tables_config.get('aws_session_token') or os.environ.get('AWS_SESSION_TOKEN')
+    aws_role_arn = tables_config.get('aws_role_arn') or os.environ.get('AWS_ROLE_ARN')
+    aws_external_id = tables_config.get('aws_external_id') or os.environ.get('AWS_EXTERNAL_ID')
+    # AWS credentials based authentication
+    # Login as an IAM User
+    if aws_access_key_id and aws_secret_access_key:
+        LOGGER.info("Setting up default session")
+        LOGGER.info(aws_access_key_id)
+        boto3.setup_default_session(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token
+        )
+
+    # Assume Role if desired
+    if aws_role_arn and aws_external_id:
+        assume_role(aws_role_arn, aws_external_id)
+    elif aws_role_arn and not aws_external_id:
+        raise ValueError("If aws_role_arn is defined in configuration, aws_external_id must also be defined.")
     
-    LOGGER.info("Found {} files.".format(len(target_objects)))
-
-    return target_objects
-
-def list_files_in_azure_bucket(container_name, search_prefix=None):
-    sas_key = os.environ['AZURE_STORAGE_CONNECTION_STRING']
-    blob_service_client = BlobServiceClient.from_connection_string(sas_key)
-    container_client = blob_service_client.get_container_client(container_name)
-    blob_iterator = container_client.list_blobs(name_starts_with=search_prefix)
-    return [{'Key': blob.name, 'LastModified': blob.last_modified} for blob in blob_iterator if blob.size > 0]
+    
 
 
+def assume_role(aws_role_arn, aws_external_id):
+    """
+    Assume and IAM role if a IAM Role ARN is available
+    The IAM User that the tap will use must have permission to assume the Role. 
+    :param aws_role_arn: The ARN of the AWS IAM Role that you wish to assume
+
+    """
+    LOGGER.info("Attempting to Assume Role")
+    sts_client = boto3.client('sts')
+    assumed_role_dict = sts_client.assume_role(
+            RoleArn=aws_role_arn,
+            RoleSessionName = "TestSession",
+            DurationSeconds= 3600,
+            ExternalId = aws_external_id
+    )
+    
+    #Save credientals received from assuming role
+    credentials = assumed_role_dict['Credentials']
+
+    temp_access_key_id = credentials['AccessKeyId']
+    temp_secret_access_key = credentials['SecretAccessKey']
+    temp_session_token = credentials['SessionToken']
+
+    #Setup another Default Session using the credentials received from 
+    boto3.setup_default_session(
+            aws_access_key_id = temp_access_key_id,
+            aws_secret_access_key = temp_secret_access_key,
+            aws_session_token = temp_session_token
+            
+    )
 
 def list_files_in_s3_bucket(bucket, search_prefix=None):
     s3_client = boto3.client('s3')
