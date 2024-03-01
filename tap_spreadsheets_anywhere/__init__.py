@@ -65,7 +65,7 @@ def discover(config):
     for table_spec in config['tables']:
         try:
             modified_since = dateutil.parser.parse(table_spec['start_date'])
-            target_files = file_utils.get_matching_objects(table_spec, modified_since)
+            target_files = file_utils.get_matching_objects(config,table_spec, modified_since)
             sample_rate = table_spec.get('sample_rate',5)
             max_sampling_read = table_spec.get('max_sampling_read', 1000)
             max_sampled_files = table_spec.get('max_sampled_files', 50)
@@ -165,7 +165,13 @@ def main():
         configlist = ast.literal_eval(tables_config.get('tables',{}))
     tables_config['tables'] = Config.validate(configlist)
 
-    file_utils.setup_aws_client(tables_config)
+    """
+    TODO: #IF AWS credentials are passed in, set up aws, skip if not
+    """
+    # if 'aws_access_key_id' in tables_config:
+    #     file_utils.setup_aws_client(tables_config)
+    # else:
+    #     LOGGER.info("AWS Credentials not found")
     # If discover flag was passed, run discovery mode and dump output to stdout
     if args.discover:
         catalog = discover(tables_config)

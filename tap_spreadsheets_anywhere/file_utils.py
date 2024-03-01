@@ -14,6 +14,9 @@ import tap_spreadsheets_anywhere.conversion as conversion
 import smart_open.ssh as ssh_transport
 import smart_open.ftp as ftp_transport
 
+from oauthlib.oauth2 import BackendApplicationClient
+from requests_oauthlib import OAuth2Session
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -120,12 +123,12 @@ def parse_path(path):
     return ('local', path_parts[0]) if len(path_parts) <= 1 else (path_parts[0], path_parts[1])
 
 
-def get_matching_objects(table_spec, modified_since=None):
+def get_matching_objects(config,table_spec, modified_since=None):
     protocol, bucket = parse_path(table_spec['path'])
 
     # TODO Breakout the transport schemes here similar to the registry/loading pattern used by smart_open
     if protocol == 's3':
-        target_objects = list_files_in_s3_bucket(bucket, table_spec.get('search_prefix'))
+        target_objects = list_files_in_s3_bucket(config, bucket, table_spec.get('search_prefix'))
     elif protocol == 'file':
         target_objects = list_files_in_local_bucket(bucket, table_spec.get('search_prefix'))
     elif protocol in ["sftp"]:
@@ -133,7 +136,7 @@ def get_matching_objects(table_spec, modified_since=None):
     elif protocol in ["ftp"]:
         target_objects = list_files_in_ftp_server(table_spec['path'],table_spec.get('search_prefix'))
     elif protocol in ["http", "https"]:
-        target_objects = convert_URL_to_file_list(table_spec)
+        target_objects = convert_URL_to_file_list(config,table_spec)
     else:
         raise ValueError("Protocol {} not yet supported. Pull Requests are welcome!")
 
@@ -193,9 +196,11 @@ def list_files_in_SSH_bucket(uri, search_prefix=None):
     LOGGER.info("Found {} files.".format(entries))
     return entries
 
-def convert_URL_to_file_list(table_spec):
+def convert_URL_to_file_list(tables_config,table_spec):
     url = table_spec["path"] + "/" + table_spec["pattern"]
-    LOGGER.info(f"Assembled {url} as the URL to a source file.")
+    LOGGER.info(f"Assembled {url} as the URL to a source file???")
+    LOGGER.info(f"Sending to OAUTH.")
+    r = setup_oauth(tables_config)
     r = requests.get(url, allow_redirects=True)
     if r:
         if 'last-modified' in r.headers:
@@ -265,6 +270,56 @@ def list_files_in_local_bucket(bucket, search_prefix=None):
     return [{'Key': filename, 'LastModified': datetime.fromtimestamp(os.path.getmtime(os.path.join(path, filename)), timezone.utc)} for
             filename in local_filenames if os.path.exists(os.path.join(path, filename))]
 
+def setup_oauth(tables_config):
+    """
+    Setup Oauth Authentication, get token, and get S3 URL
+    """
+    LOGGER.info(f"Setting up Oauth.")
+    client_id = tables_config.get('client_id')
+    client_secret = tables_config.get('client_secret')
+    authorization_url = tables_config.get('authorization_url')
+    gapi_url = tables_config.get('gapi_url')
+    correlation_object = tables_config.get('correlation_object')
+
+    client = BackendApplicationClient(client_id)
+    oauth_session = OAuth2Session(client=client)
+    access_token = oauth_session.fetch_token(token_url = authorization_url, client_id = client_id, client_secret=client_secret)
+
+    headers = {'Authorization': f'Bearer {access_token["access_token"]}',
+           'correlation-object':f'{correlation_object}'}
+    LOGGER.info(headers)
+    return get_presigned_url(gapi_url, headers)
+
+def get_presigned_url(gapi_url, headers):
+    """
+    Send request to S3 URL with encryption information to receive file. 
+    """
+    LOGGER.info(f"Getting Presigned URL.")
+    r = requests.get(
+        gapi_url,
+        headers = headers)
+    LOGGER.info(r.json())
+    r = r.json()['result']
+    return parse_url_response(r)
+
+def parse_url_response(url_response):
+    LOGGER.info(f"Parsing URL.")
+    file_name = url_response['name']
+    last_modified_date = url_response['lastModifiedDate']
+    url = url_response['URL']
+    headers = {
+        'x-amz-server-side-encryption-customer-algorithm' : url_response['encryption']['algorithm'],
+        'x-amz-server-side-encryption-customer-key' : url_response['encryption']['key'],
+        'x-amz-server-side-encryption-customer-key-md5' : url_response['encryption']['keyMD5']
+    }
+    print(url,headers)
+    LOGGER.info(f"Getting file")
+    r = requests.get(
+        url,
+        headers = headers
+    )
+    LOGGER.info(r.text)
+    return r
 
 def setup_aws_client(tables_config):
     """
@@ -283,7 +338,6 @@ def setup_aws_client(tables_config):
     # Login as an IAM User
     if aws_access_key_id and aws_secret_access_key:
         LOGGER.info("Setting up default session")
-        LOGGER.info(aws_access_key_id)
         boto3.setup_default_session(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
@@ -330,7 +384,8 @@ def assume_role(aws_role_arn, aws_external_id):
             
     )
 
-def list_files_in_s3_bucket(bucket, search_prefix=None):
+def list_files_in_s3_bucket(tables_config, bucket, search_prefix=None):
+    setup_aws_client(tables_config)
     s3_client = boto3.client('s3')
     s3_objects = []
 
