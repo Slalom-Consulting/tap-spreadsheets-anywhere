@@ -288,7 +288,8 @@ def setup_oauth(tables_config):
     access_token = oauth_session.fetch_token(token_url = authorization_url, client_id = client_id, client_secret=client_secret)
 
     headers = {'Authorization': f'Bearer {access_token["access_token"]}',
-           'correlation-object':f'{correlation_object}'}
+           'correlation-object':f'{{"correlationId":"{correlation_object}"}}'}
+    LOGGER.info(headers)
     return get_presigned_url(gapi_url, headers)
 
 def get_presigned_url(gapi_url, headers):
