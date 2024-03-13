@@ -126,7 +126,7 @@ def sync(config, state, catalog):
             )
             modified_since = dateutil.parser.parse(
                 state.get(stream.tap_stream_id, {}).get('modified_since') or table_spec['start_date'])
-            target_files = file_utils.get_matching_objects(table_spec, modified_since)
+            target_files = file_utils.get_matching_objects(config, table_spec, modified_since)
             max_records_per_run = table_spec.get('max_records_per_run', -1)
             records_streamed = 0
             for t_file in target_files:
@@ -165,13 +165,6 @@ def main():
         configlist = ast.literal_eval(tables_config.get('tables',{}))
     tables_config['tables'] = Config.validate(configlist)
 
-    """
-    TODO: #IF AWS credentials are passed in, set up aws, skip if not
-    """
-    # if 'aws_access_key_id' in tables_config:
-    #     file_utils.setup_aws_client(tables_config)
-    # else:
-    #     LOGGER.info("AWS Credentials not found")
     # If discover flag was passed, run discovery mode and dump output to stdout
     if args.discover:
         catalog = discover(tables_config)

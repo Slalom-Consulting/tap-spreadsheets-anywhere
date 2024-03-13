@@ -12,6 +12,7 @@ CONFIG_CONTRACT = Schema([{
         Required('start_date'): str,
         Required('key_properties'): [str],
         Required('format'): Any('csv', 'excel', 'json', 'jsonl', 'detect'),
+        Optional('is_bulk'): bool,
         Optional('encoding'): str,
         Optional('invalid_format_action'): Any('ignore','fail'),
         Optional('universal_newlines'): bool,

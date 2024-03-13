@@ -18,14 +18,12 @@ from oauthlib.oauth2 import BackendApplicationClient
 from requests_oauthlib import OAuth2Session
 
 LOGGER = logging.getLogger(__name__)
-
-
+    
 def resolve_target_uri(table_spec, target_filename):
     protocol, bucket = parse_path(table_spec['path'])
     # TODO: logic below is disabled because we can't currently support reading filenames from Content-Disposition (Excel limitations)
-    if False and protocol in ["http", "https"] and table_spec['pattern'] != target_filename:
-        # Handle case where URL returns a filename in the response so we do NOT append the pattern to get the URI
-        return table_spec['path']
+    if protocol in ['http', 'https'] and table_spec['is_bulk']:
+        return 'Bulk'
     else:
         return table_spec['path'] + "/" + target_filename
 
@@ -197,11 +195,16 @@ def list_files_in_SSH_bucket(uri, search_prefix=None):
     return entries
 
 def convert_URL_to_file_list(tables_config,table_spec):
+    #check to see if the URL is a bulk style endpoint
+    is_bulk = table_spec["is_bulk"]
     url = table_spec["path"] + "/" + table_spec["pattern"]
-    LOGGER.info(f"Assembled {url} as the URL to a source file???")
-    LOGGER.info(f"Sending to OAUTH.")
-    r = setup_oauth(tables_config)
-    r = requests.get(url, allow_redirects=True)
+    LOGGER.info(f"Assembled {url} as the URL to a source file")
+    if is_bulk:
+        LOGGER.info(f"Sending to OAUTH.")
+        r, file_name, last_modified = setup_oauth(tables_config)
+    else:
+        r = requests.get(url, allow_redirects=True)
+        file_name = table_spec["pattern"]
     if r:
         if 'last-modified' in r.headers:
             last_modified = pytz.UTC.localize(datetime.strptime(r.headers['last-modified'], '%a, %d %b %Y %H:%M:%S %Z'))
@@ -209,7 +212,6 @@ def convert_URL_to_file_list(tables_config,table_spec):
             LOGGER.warning("URL did not return a last-modified header so using current date and time.")
             last_modified = datetime.now(tz=timezone.utc)
 
-        filename = table_spec["pattern"]
         # TODO: logic below is disabled because we can't currently support reading filenames from Content-Disposition (Excel limitations)
         # if 'content-disposition' in r.headers:
         #     cd = r.headers['content-disposition']
@@ -217,8 +219,7 @@ def convert_URL_to_file_list(tables_config,table_spec):
         #     LOGGER.info("URL returned '" + filename + "' as the targeted filename.")
         # else:
         #     LOGGER.warning("URL did not return a content-disposition header so using pattern '"+table_spec["pattern"]+"' as the targeted filename.")
-
-        return [{'Key': filename, 'LastModified':last_modified}]
+        return [{'Key': file_name, 'LastModified':last_modified}]
     else:
         raise ValueError(f"Configured URL {url} could not be read.")
 
@@ -275,6 +276,7 @@ def setup_oauth(tables_config):
     Setup Oauth Authentication, get token, and get S3 URL
     """
     LOGGER.info(f"Setting up Oauth.")
+
     client_id = tables_config.get('client_id')
     client_secret = tables_config.get('client_secret')
     authorization_url = tables_config.get('authorization_url')
@@ -287,7 +289,6 @@ def setup_oauth(tables_config):
 
     headers = {'Authorization': f'Bearer {access_token["access_token"]}',
            'correlation-object':f'{correlation_object}'}
-    LOGGER.info(headers)
     return get_presigned_url(gapi_url, headers)
 
 def get_presigned_url(gapi_url, headers):
@@ -298,28 +299,40 @@ def get_presigned_url(gapi_url, headers):
     r = requests.get(
         gapi_url,
         headers = headers)
-    LOGGER.info(r.json())
     r = r.json()['result']
     return parse_url_response(r)
 
 def parse_url_response(url_response):
+    """
+    SEE IF THE ENCRYPTION HEADERS ARE INCLUDED
+    """
     LOGGER.info(f"Parsing URL.")
     file_name = url_response['name']
     last_modified_date = url_response['lastModifiedDate']
     url = url_response['URL']
-    headers = {
-        'x-amz-server-side-encryption-customer-algorithm' : url_response['encryption']['algorithm'],
-        'x-amz-server-side-encryption-customer-key' : url_response['encryption']['key'],
-        'x-amz-server-side-encryption-customer-key-md5' : url_response['encryption']['keyMD5']
-    }
-    print(url,headers)
+    if 'encryption' in url_response:
+        headers = set_encryption_headers(url_response['encryption'])
+    else:
+        headers = {}
     LOGGER.info(f"Getting file")
     r = requests.get(
         url,
         headers = headers
     )
-    LOGGER.info(r.text)
-    return r
+    os.environ['download_url'] = url
+    return r, file_name, last_modified_date
+
+def set_encryption_headers(encryption_headers):
+    headers = {
+        'x-amz-server-side-encryption-customer-algorithm' : encryption_headers['algorithm'],
+        'x-amz-server-side-encryption-customer-key' : encryption_headers['key'],
+        'x-amz-server-side-encryption-customer-key-md5' : encryption_headers['keyMD5']
+    }
+    os.environ['encryption-customer-algorithm'] = encryption_headers['algorithm']
+    os.environ['encryption-customer-key'] = encryption_headers['key']
+    os.environ['encryption-customer-key-md5'] = encryption_headers['keyMD5']
+
+    return headers
 
 def setup_aws_client(tables_config):
     """

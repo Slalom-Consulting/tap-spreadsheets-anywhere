@@ -19,26 +19,36 @@ class InvalidFormatError(Exception):
 
 
 def get_streamreader(uri, universal_newlines=True, newline='', open_mode='r', encoding='utf-8'):
-    kwarg_dispatch = {
-        "azure": lambda: {
-            "transport_params": {
-                "client": BlobServiceClient.from_connection_string(
-                    os.environ['AZURE_STORAGE_CONNECTION_STRING'],
-                )
-            }
-        },
-    }
+    if uri == 'Bulk':
+        uri = os.environ['download_url']
+    if 'encryption-customer-algorithm' in os.environ:
+        params = {
+        'headers' : {
+            'x-amz-server-side-encryption-customer-algorithm' :  os.environ['encryption-customer-algorithm'],
+            'x-amz-server-side-encryption-customer-key' : os.environ['encryption-customer-key'],
+            'x-amz-server-side-encryption-customer-key-md5' : os.environ['encryption-customer-key-md5']
+        }}
+    else:
+        params = {}
+    
+    # kwarg_dispatch = {
+    #     "azure": lambda: {
+    #         "transport_params": {
+    #             "x-amz-server-side-encryption-customer-algorithm": os.environ['x-amz-server-side-encryption-customer-algorithm']
+    #             )
+    #         }
+    #     },
+    # }
 
-    SCHEME_SEP = "://"
-    kwargs = kwarg_dispatch.get(uri.split(SCHEME_SEP, 1)[0], lambda: {})()
+    # SCHEME_SEP = "://"
+    # kwargs = kwarg_dispatch.get(uri.split(SCHEME_SEP, 1)[0], lambda: {})()
 
     # When reading in binary mode, undefine `encoding`.
     # Otherwise, `smart_open` will return a `TextIOWrapper` in `"r"` mode.
     # However, reading binary streams needs a `BufferedReader`.
     if "b" in open_mode:
         encoding = None
-    streamreader = smart_open.open(uri, open_mode, newline=newline, errors='surrogateescape', encoding=encoding, **kwargs)
-
+    streamreader = smart_open.open(uri, open_mode, newline=newline, errors='surrogateescape', encoding=encoding, transport_params=params)
     if not universal_newlines and isinstance(streamreader, StreamReader):
         return monkey_patch_streamreader(streamreader)
     return streamreader
