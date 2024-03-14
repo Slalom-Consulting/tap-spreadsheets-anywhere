@@ -64,6 +64,10 @@ def discover(config):
     streams = []
     for table_spec in config['tables']:
         try:
+            if table_spec['is_bulk'] == "true":
+                table_spec['is_bulk'] = True
+            else:
+                table_spec['is_bulk'] = False
             modified_since = dateutil.parser.parse(table_spec['start_date'])
             target_files = file_utils.get_matching_objects(config,table_spec, modified_since)
             sample_rate = table_spec.get('sample_rate',5)
