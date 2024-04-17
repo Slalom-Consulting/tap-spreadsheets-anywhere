@@ -18,6 +18,8 @@ setup(
         'openpyxl',
         'xlrd',
         'paramiko',
+        'oauthlib',
+        'requests_oauthlib',
         'azure-storage-blob>=12.14.0'
     ],
     packages=["tap_spreadsheets_anywhere"],

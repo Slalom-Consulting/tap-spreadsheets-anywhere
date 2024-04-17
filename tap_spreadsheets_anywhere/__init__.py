@@ -64,8 +64,12 @@ def discover(config):
     streams = []
     for table_spec in config['tables']:
         try:
+            if table_spec['is_bulk'] == "true":
+                table_spec['is_bulk'] = True
+            else:
+                table_spec['is_bulk'] = False
             modified_since = dateutil.parser.parse(table_spec['start_date'])
-            target_files = file_utils.get_matching_objects(table_spec, modified_since)
+            target_files = file_utils.get_matching_objects(config,table_spec, modified_since)
             sample_rate = table_spec.get('sample_rate',5)
             max_sampling_read = table_spec.get('max_sampling_read', 1000)
             max_sampled_files = table_spec.get('max_sampled_files', 50)
@@ -126,7 +130,7 @@ def sync(config, state, catalog):
             )
             modified_since = dateutil.parser.parse(
                 state.get(stream.tap_stream_id, {}).get('modified_since') or table_spec['start_date'])
-            target_files = file_utils.get_matching_objects(table_spec, modified_since)
+            target_files = file_utils.get_matching_objects(config, table_spec, modified_since)
             max_records_per_run = table_spec.get('max_records_per_run', -1)
             records_streamed = 0
             for t_file in target_files:
@@ -165,7 +169,6 @@ def main():
         configlist = ast.literal_eval(tables_config.get('tables',{}))
     tables_config['tables'] = Config.validate(configlist)
 
-    file_utils.setup_aws_client(tables_config)
     # If discover flag was passed, run discovery mode and dump output to stdout
     if args.discover:
         catalog = discover(tables_config)
