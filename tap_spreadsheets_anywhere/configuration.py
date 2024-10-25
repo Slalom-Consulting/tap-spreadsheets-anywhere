@@ -28,7 +28,7 @@ CONFIG_CONTRACT = Schema([{
         Optional('max_sampling_read'): int,
         Optional('max_records_per_run'): int,
         Optional('max_sampled_files'): int,
-        Optional('prefer_number_vs_integer'): bool,
+        Optional('prefer_number_vs_integer'): str,
         Optional('prefer_schema_as_string'): bool,
         Optional('schema_overrides'): {
             str: {
