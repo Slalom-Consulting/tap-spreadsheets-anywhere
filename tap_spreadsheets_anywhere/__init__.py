@@ -48,7 +48,12 @@ def generate_schema(table_spec, samples):
         '_smart_source_file': {'type': 'string'},
         '_smart_source_lineno': {'type': 'integer'},
     }
-    prefer_number_vs_integer = table_spec.get('prefer_number_vs_integer', True)
+    prefer_number_vs_integer = table_spec.get('prefer_number_vs_integer', False)
+    if prefer_number_vs_integer == 'true':
+        prefer_number_vs_integer = True
+    elif prefer_number_vs_integer == 'false':
+        prefer_number_vs_integer = False
+
     prefer_schema_as_string = table_spec.get('prefer_schema_as_string', False)
     data_schema = conversion.generate_schema(samples, prefer_number_vs_integer=prefer_number_vs_integer, prefer_schema_as_string=prefer_schema_as_string)
     inferred_schema = {
