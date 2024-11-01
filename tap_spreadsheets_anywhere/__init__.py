@@ -138,6 +138,9 @@ def sync(config, state, catalog):
             target_files = file_utils.get_matching_objects(config, table_spec, modified_since)
             max_records_per_run = table_spec.get('max_records_per_run', -1)
             records_streamed = 0
+            if len(target_files) == 0:
+                state[stream.tap_stream_id] = {'modified_since': modified_since.isoformat()}
+                singer.write_state(state)
             for t_file in target_files:
                 records_streamed += file_utils.write_file(t_file['key'], table_spec, merged_schema, max_records=max_records_per_run-records_streamed)
                 if 0 < max_records_per_run <= records_streamed:
