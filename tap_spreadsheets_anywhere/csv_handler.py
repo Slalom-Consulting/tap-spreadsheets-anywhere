@@ -12,10 +12,8 @@ def generator_wrapper(reader):
                 key = '_smart_extra'
 
             formatted_key = key
-
             # remove non-word, non-whitespace characters
             formatted_key = re.sub(r"[^\w\s]", '', formatted_key)
-
             # replace whitespace with underscores
             formatted_key = re.sub(r"\s+", '_', formatted_key)
             to_return[formatted_key.lower()] = value
@@ -38,10 +36,16 @@ def get_row_iterator(table_spec, reader):
     else:
         custom_delimiter = table_spec.get('delimiter', ',')
         custom_quotechar = table_spec.get('quotechar', '"')
-        if custom_delimiter != ',' or custom_quotechar != '"':
+        custom_quoting   = table_spec.get('quoting', 'None')
+        LOGGER.info("custom_quoting")
+        if custom_delimiter != ',' or custom_quotechar != '"' or custom_quoting != 'None':
+            LOGGER.info("Using Custom Dialect")
             class custom_dialect(csv.excel):
                 delimiter = custom_delimiter
                 quotechar = custom_quotechar
+                if custom_quoting == 'quote_all':
+                    doublequote = True
+                    quoting=csv.QUOTE_ALL
             dialect = 'custom_dialect'
             csv.register_dialect(dialect, custom_dialect)
 
